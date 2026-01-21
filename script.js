@@ -12,8 +12,11 @@ let canvas, ctx, isDrawing = false, lastX, lastY;
 let canvasHistory = [];
 let historyIndex = -1;
 
+// ВАШ КЛЮЧ УЖЕ ВСТАВЛЕН СЮДА
+const HARDCODED_API_KEY = "sk-or-vv-ed2e4859ed346d628e482cab98519690ea83666076a1161616e9f914569ec227";
+
 let state = {
-    currentModel: 'gpt-oss',
+    currentModel: 'gpt-4o-mini', // Ставим модель по умолчанию
     conversationHistory: [],
     chats: [],
     currentChatId: null,
@@ -26,17 +29,41 @@ let state = {
         systemPrompt: '', 
         userName: 'Пользователь', 
         accentColor: '#4a5fc1', 
-        apiKeys: { chatgpt: '', deepseek: '', qwen: '' } 
+        // АВТОМАТИЧЕСКАЯ ПОДСТАНОВКА КЛЮЧЕЙ
+        apiKeys: { 
+            chatgpt: HARDCODED_API_KEY, 
+            deepseek: HARDCODED_API_KEY, 
+            qwen: HARDCODED_API_KEY 
+        } 
     },
     customModels: [],
     isPreviewModeActive: false,
     activeCodePreviewContent: '',
 };
 
+// НАСТРОЙКА МОДЕЛЕЙ ПОД VSEGPT
 const BUILT_IN_MODELS = {
-    'gpt-oss':  { name: 'ChatGPT', endpoint: 'https://openrouter.ai/api/v1/chat/completions', modelName: 'openai/gpt-oss-20b:free', apiKeyName: 'chatgpt', vision: false },
-    'deepseek': { name: 'DeepSeek', endpoint: 'https://openrouter.ai/api/v1/chat/completions', modelName: 'deepseek/deepseek-chat', apiKeyName: 'deepseek', vision: false },
-    'qwen':     { name: 'Qwen (Vision)', endpoint: 'https://openrouter.ai/api/v1/chat/completions', modelName: 'qwen/qwen2.5-vl-32b-instruct:free', apiKeyName: 'qwen', vision: true }
+    'gpt-4o-mini':  { 
+        name: 'GPT-4o Mini', 
+        endpoint: 'https://api.vsegpt.ru/v1/chat/completions', // Используем VseGPT
+        modelName: 'openai/gpt-4o-mini', 
+        apiKeyName: 'chatgpt', 
+        vision: true 
+    },
+    'deepseek': { 
+        name: 'DeepSeek V3', 
+        endpoint: 'https://api.vsegpt.ru/v1/chat/completions', 
+        modelName: 'deepseek/deepseek-chat', 
+        apiKeyName: 'deepseek', 
+        vision: false 
+    },
+    'qwen': { 
+        name: 'Qwen VL Plus', 
+        endpoint: 'https://api.vsegpt.ru/v1/chat/completions', 
+        modelName: 'vis-qwen/qwen-vl-plus', 
+        apiKeyName: 'qwen', 
+        vision: true 
+    }
 };
 
 // ===================================================================================
@@ -56,7 +83,12 @@ function loadState() {
     if (chats) state.chats = chats;
     if (settings) {
         state.settings = { ...state.settings, ...settings };
-        if (!state.settings.apiKeys) state.settings.apiKeys = { chatgpt: '', deepseek: '', qwen: '' };
+        // Принудительно обновляем ключи, даже если в localStorage старые
+        state.settings.apiKeys = { 
+            chatgpt: HARDCODED_API_KEY, 
+            deepseek: HARDCODED_API_KEY, 
+            qwen: HARDCODED_API_KEY 
+        };
     }
     if (customModels) state.customModels = customModels;
 }
@@ -117,9 +149,11 @@ function applySettings() {
     updateUserAvatar();
     updateUserMenuIdentity();
     DOMElements.systemPrompt.value = state.settings.systemPrompt;
-    DOMElements.apiKey_chatgpt.value = state.settings.apiKeys.chatgpt || '';
-    DOMElements.apiKey_deepseek.value = state.settings.apiKeys.deepseek || '';
-    DOMElements.apiKey_qwen.value = state.settings.apiKeys.qwen || '';
+    
+    // Заполняем поля в настройках звездочками, чтобы не светить ключ явно пользователю, но он там есть
+    DOMElements.apiKey_chatgpt.value = state.settings.apiKeys.chatgpt ? '••••••••••••••••' : '';
+    DOMElements.apiKey_deepseek.value = state.settings.apiKeys.deepseek ? '••••••••••••••••' : '';
+    DOMElements.apiKey_qwen.value = state.settings.apiKeys.qwen ? '••••••••••••••••' : '';
 }
 
 function updateUserAvatar() {
@@ -154,9 +188,13 @@ function saveSettings() {
     state.settings.systemPrompt = DOMElements.systemPrompt.value;
     state.settings.userName = DOMElements.userNameInput.value.trim() || 'Пользователь';
     state.settings.accentColor = DOMElements.accentColor.value.trim() || '#4a5fc1';
-    state.settings.apiKeys.chatgpt = DOMElements.apiKey_chatgpt.value.trim();
-    state.settings.apiKeys.deepseek = DOMElements.apiKey_deepseek.value.trim();
-    state.settings.apiKeys.qwen = DOMElements.apiKey_qwen.value.trim();
+    
+    // Не перезаписываем ключи из полей ввода, если там звездочки, оставляем хардкод
+    // Если пользователь ввел что-то свое, сохраняем это
+    if (!DOMElements.apiKey_chatgpt.value.includes('•••')) state.settings.apiKeys.chatgpt = DOMElements.apiKey_chatgpt.value.trim();
+    if (!DOMElements.apiKey_deepseek.value.includes('•••')) state.settings.apiKeys.deepseek = DOMElements.apiKey_deepseek.value.trim();
+    if (!DOMElements.apiKey_qwen.value.includes('•••')) state.settings.apiKeys.qwen = DOMElements.apiKey_qwen.value.trim();
+
     saveState();
     applySettings();
     toggleModal('settingsModal', false);
@@ -179,7 +217,7 @@ function saveCustomModel() {
     const vision = DOMElements.modelVision.checked;
     if (!modelName) { alert('Имя модели (Model Name) обязательно для заполнения.'); return; }
     try { new URL(baseUrl); } catch (e) { if (baseUrl) { alert('Base URL не является корректным URL.'); return; } }
-    const newModel = { id: `custom-${Date.now()}`, name: modelName, baseUrl: baseUrl || 'https://openrouter.ai/api/v1/chat/completions', apiKey: apiKey, vision: vision };
+    const newModel = { id: `custom-${Date.now()}`, name: modelName, baseUrl: baseUrl || 'https://api.vsegpt.ru/v1/chat/completions', apiKey: apiKey || HARDCODED_API_KEY, vision: vision };
     state.customModels.push(newModel);
     saveState(); renderModelDropdown(); toggleModal('addModelModal', false);
 }
@@ -187,7 +225,7 @@ function saveCustomModel() {
 function deleteCustomModel(modelId) {
     if (!confirm(`Вы уверены, что хотите удалить модель "${state.customModels.find(m => m.id === modelId)?.name}"?`)) return;
     state.customModels = state.customModels.filter(m => m.id !== modelId);
-    if (state.currentModel === modelId) state.currentModel = 'gpt-oss';
+    if (state.currentModel === modelId) state.currentModel = 'gpt-4o-mini';
     saveState(); loadChat(state.currentChatId);
 }
 
@@ -231,7 +269,7 @@ function loadChat(chatId, maintainScroll = false) {
     if (!chat) { prepareNewChatUI(); return; }
     const mainEl = DOMElements.main;
     const isScrolledToBottom = mainEl.scrollHeight - mainEl.clientHeight <= mainEl.scrollTop + 1;
-    state.currentChatId = chatId; state.conversationHistory = chat.messages || []; state.currentModel = chat.model || 'gpt-oss';
+    state.currentChatId = chatId; state.conversationHistory = chat.messages || []; state.currentModel = chat.model || 'gpt-4o-mini';
     DOMElements.chatContainer.innerHTML = '';
     const hasMessages = state.conversationHistory.length > 0;
     DOMElements.welcomeScreen.classList.toggle('hidden', hasMessages); DOMElements.chatContainer.classList.toggle('active', hasMessages);
@@ -452,7 +490,7 @@ function addMessageToDOM(message, isHistory = false) {
     if (message.role === 'user') {
         const hasFiles = message.files && message.files.length > 0; const hasText = message.originalContent && message.originalContent.trim() !== ''; if (!hasFiles && !hasText) return; 
         const contentContainer = document.createElement('div'); contentContainer.className = 'message-content';
-        if (hasFiles) { message.files.forEach(file => { const attachmentEl = document.createElement('div'); attachmentEl.className = 'user-message-part attachment-preview'; attachmentEl.dataset.fileId = file.id; const displayName = file.name.length > 25 ? file.name.substring(0, 22) + '...' : file.name; let iconOrImg; if(file.fileType === 'image' && file.previewUrl) { iconOrImg = `<img src="${file.previewUrl}" alt="${file.name}" style="width: 100%; height: 100%; object-fit: cover;">`; } else { iconOrImg = `<span class="material-symbols-outlined">${file.icon || 'description'}</span>`; } attachmentEl.innerHTML = `<div class="attachment-icon" style="background-color: ${file.iconColor || '#007bff'};">${iconOrImg}</div><div class="attachment-details"><div class="attachment-name">${displayName}</div><div class="attachment-type">${file.typeDescription || 'Файл'}</div></div><div class="attachment-delete-overlay"><span class="material-symbols-outlined">delete</span></div>`; contentContainer.appendChild(attachmentEl); }); }
+        if (hasFiles) { message.files.forEach(file => { const attachmentEl = document.createElement('div'); attachmentEl.className = 'user-message-part attachment-preview'; attachmentEl.dataset.fileId = file.id; const displayName = file.name.length > 25 ? file.name.substring(0, 22) + '...' : file.name; let iconOrImg; if(file.fileType === 'image' && file.previewUrl) { iconOrImg = `<img src="${file.previewUrl}" alt="${file.name}" style="width: 100%; height: 100%; object-fit: cover;">`; } else { iconOrImg = `<span class="material-symbols-outlined">${file.icon || 'description'}</span>`; } attachmentEl.innerHTML = `<div class="attachment-icon" style="background-color: ${file.iconColor || '#007bff'};">${iconOrImg}</div><div class="attachment-details"><div class="attachment-name">${displayName}</div><div class="attachment-type">${file.typeDescription}</span></div></div><div class="attachment-delete-overlay"><span class="material-symbols-outlined">delete</span></div>`; contentContainer.appendChild(attachmentEl); }); }
         if (hasText) { const textEl = document.createElement('div'); textEl.className = 'user-message-part text-preview'; textEl.innerHTML = marked.parse(message.originalContent); contentContainer.appendChild(textEl); }
         messageBody.appendChild(contentContainer); messageEl.appendChild(messageBody);
         if(hasText || (message.files && message.files.length > 0)){ const actionsEl = document.createElement('div'); actionsEl.className = 'message-actions'; actionsEl.innerHTML = `<button class="icon-btn edit-message-btn" title="Редактировать"><span class="material-symbols-outlined">edit</span></button>`; messageEl.appendChild(actionsEl); }
@@ -480,7 +518,9 @@ async function handleSendMessage(editedText = null, editedFiles = null) {
     const userText = editedText !== null ? editedText : DOMElements.messageInput.value.trim(); const files = editedFiles !== null ? editedFiles : state.attachedFiles; if (userText === '' && files.length === 0) return;
     document.body.classList.remove('new-chat-active');
     const currentModelDetails = getModelDetails(state.currentModel);
-    if (!currentModelDetails || !currentModelDetails.apiKey) { alert(`API ключ для модели "${currentModelDetails?.displayName || state.currentModel}" не найден.`); if (state.currentModel.startsWith('custom-')) toggleModal('addModelModal', true); else toggleModal('settingsModal', true); return; }
+    
+    // ПРОВЕРКА КЛЮЧА НЕ НУЖНА, ТАК КАК ОН ЗАШИТ
+    
     if (state.currentChatId === null) { const newChatObject = { id: Date.now(), title: 'Новый чат', messages: [], model: state.currentModel, createdAt: new Date().toISOString() }; state.chats.unshift(newChatObject); state.currentChatId = newChatObject.id; updatePageTitle(); }
     DOMElements.welcomeScreen.classList.add('hidden'); DOMElements.chatContainer.classList.add('active');
     if (editedText === null) { const userMsg = { role: 'user', id: Date.now(), originalContent: userText, files: files.map(f => ({...f})) }; state.conversationHistory.push(userMsg); addMessageToDOM(userMsg); DOMElements.messageInput.value = ''; DOMElements.messageInput.dispatchEvent(new Event('input')); clearAttachedFiles(); }

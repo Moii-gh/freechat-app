@@ -1,3 +1,4 @@
+
 // ===================================================================================
 // --- РАЗДЕЛ 1: ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЕ ---
 // ===================================================================================
@@ -99,9 +100,10 @@ function initTelegramApp() {
     tg.ready();
     tg.expand(); 
 
+    // ИСПРАВЛЕНИЕ 1: Убрана принудительная смена фона на черный
     if (tg.colorScheme) {
         state.settings.theme = tg.colorScheme;
-        document.body.style.backgroundColor = tg.themeParams.bg_color;
+        // Мы НЕ меняем background-color body, оставляем тот, что в style.css (#1a1a1a)
     }
 
     const user = tg.initDataUnsafe.user;
@@ -150,7 +152,7 @@ function applySettings() {
     updateUserMenuIdentity();
     DOMElements.systemPrompt.value = state.settings.systemPrompt;
     
-    // Заполняем поля в настройках звездочками, чтобы не светить ключ явно пользователю, но он там есть
+    // Заполняем поля в настройках звездочками, чтобы не светить ключ явно пользователю
     DOMElements.apiKey_chatgpt.value = state.settings.apiKeys.chatgpt ? '••••••••••••••••' : '';
     DOMElements.apiKey_deepseek.value = state.settings.apiKeys.deepseek ? '••••••••••••••••' : '';
     DOMElements.apiKey_qwen.value = state.settings.apiKeys.qwen ? '••••••••••••••••' : '';
@@ -189,8 +191,6 @@ function saveSettings() {
     state.settings.userName = DOMElements.userNameInput.value.trim() || 'Пользователь';
     state.settings.accentColor = DOMElements.accentColor.value.trim() || '#4a5fc1';
     
-    // Не перезаписываем ключи из полей ввода, если там звездочки, оставляем хардкод
-    // Если пользователь ввел что-то свое, сохраняем это
     if (!DOMElements.apiKey_chatgpt.value.includes('•••')) state.settings.apiKeys.chatgpt = DOMElements.apiKey_chatgpt.value.trim();
     if (!DOMElements.apiKey_deepseek.value.includes('•••')) state.settings.apiKeys.deepseek = DOMElements.apiKey_deepseek.value.trim();
     if (!DOMElements.apiKey_qwen.value.includes('•••')) state.settings.apiKeys.qwen = DOMElements.apiKey_qwen.value.trim();
@@ -530,16 +530,99 @@ async function handleSendMessage(editedText = null, editedFiles = null) {
 async function getAIResponse(overrideMessages = null) {
     state.isGenerating = true; document.body.classList.add('is-generating'); setSendButtonState(); state.abortController = new AbortController();
     const currentModelDetails = getModelDetails(state.currentModel); if (!currentModelDetails) { console.error("Critical error: Cannot find details for the current model."); return; }
-    const messagesToSend = overrideMessages || state.conversationHistory.filter(m => !m.isHidden).map(msg => { if (msg.role === 'assistant') return { role: 'assistant', content: msg.content }; const hasImages = msg.files && msg.files.some(f => f.fileType === 'image'); if (isCurrentModelVisionCapable() && hasImages) { const textParts = []; if (msg.originalContent) textParts.push(msg.originalContent); const textFileContent = msg.files.filter(f => f.fileType !== 'image' && f.content).map(f => `\n\n--- Контекст из файла ${f.name} ---\n${f.content}`).join(''); if (textFileContent) textParts.push(textFileContent); const contentParts = [{ type: 'text', text: textParts.join('\n') }]; msg.files.forEach(file => { if (file.fileType === 'image') contentParts.push({ type: 'image_url', image_url: { url: file.content } }); }); return { role: 'user', content: contentParts }; } else { let combinedContent = msg.originalContent || ''; if (msg.files && msg.files.length > 0) { const fileContext = msg.files.map(f => { const fileText = f.fileType === 'image' ? `[Изображение: ${f.name}]` : f.content; return `\n\n--- Контекст из файла ${f.name} ---\n${fileText}`; }).join(''); combinedContent += fileContext; } return { role: 'user', content: combinedContent }; } });
+    
+    const messagesToSend = overrideMessages || state.conversationHistory.filter(m => !m.isHidden).map(msg => { 
+        if (msg.role === 'assistant') return { role: 'assistant', content: msg.content }; 
+        const hasImages = msg.files && msg.files.some(f => f.fileType === 'image'); 
+        if (isCurrentModelVisionCapable() && hasImages) { 
+            const textParts = []; if (msg.originalContent) textParts.push(msg.originalContent); 
+            const textFileContent = msg.files.filter(f => f.fileType !== 'image' && f.content).map(f => `\n\n--- Контекст из файла ${f.name} ---\n${f.content}`).join(''); 
+            if (textFileContent) textParts.push(textFileContent); 
+            const contentParts = [{ type: 'text', text: textParts.join('\n') }]; 
+            msg.files.forEach(file => { if (file.fileType === 'image') contentParts.push({ type: 'image_url', image_url: { url: file.content } }); }); 
+            return { role: 'user', content: contentParts }; 
+        } else { 
+            let combinedContent = msg.originalContent || ''; 
+            if (msg.files && msg.files.length > 0) { 
+                const fileContext = msg.files.map(f => { const fileText = f.fileType === 'image' ? `[Изображение: ${f.name}]` : f.content; return `\n\n--- Контекст из файла ${f.name} ---\n${fileText}`; }).join(''); 
+                combinedContent += fileContext; 
+            } 
+            return { role: 'user', content: combinedContent }; 
+        } 
+    });
+
     let finalSystemPrompt = state.settings.systemPrompt; if(state.settings.userName && state.settings.userName !== 'Пользователь') { finalSystemPrompt += `\n\nК пользователю обращайся по имени: ${state.settings.userName}.`; } if (finalSystemPrompt) { messagesToSend.unshift({ role: 'system', content: finalSystemPrompt.trim() }); }
-    const aiMsg = { role: 'assistant', id: Date.now(), content: '' }; const aiMessageElement = addMessageToDOM(aiMsg), contentElement = aiMessageElement.querySelector('.message-content');
+    
+    const aiMsg = { role: 'assistant', id: Date.now(), content: '' }; 
+    const aiMessageElement = addMessageToDOM(aiMsg), contentElement = aiMessageElement.querySelector('.message-content');
+    
     try {
-        const response = await fetch(currentModelDetails.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentModelDetails.apiKey}`, 'HTTP-Referer': window.location.href, 'X-Title': encodeURIComponent(document.title) }, body: JSON.stringify({ model: currentModelDetails.modelName, messages: messagesToSend, stream: true }), signal: state.abortController.signal });
+        const response = await fetch(currentModelDetails.endpoint, { 
+            method: 'POST', 
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${currentModelDetails.apiKey}` 
+                // УБРАНЫ ЗАГОЛОВКИ HTTP-Referer и X-Title, которые могли блокировать запрос
+            }, 
+            body: JSON.stringify({ model: currentModelDetails.modelName, messages: messagesToSend, stream: true }), 
+            signal: state.abortController.signal 
+        });
+        
         if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error.message || `HTTP error! status: ${response.status}`); }
         const reader = response.body.getReader(), decoder = new TextDecoder();
-        while (true) { const { done, value } = await reader.read(); if (done) break; const textChunk = decoder.decode(value, { stream: true }); const lines = textChunk.split('\n').filter(line => line.startsWith('data: ')); for (const line of lines) { const jsonStr = line.substring(6); if (jsonStr.trim() === '[DONE]') break; try { const parsed = JSON.parse(jsonStr), chunkContent = parsed.choices[0]?.delta?.content; if (chunkContent) { aiMsg.content += chunkContent; let formatted = aiMsg.content.includes('```') ? _formatCodeContent(aiMsg.content) : aiMsg.content; contentElement.innerHTML = marked.parse(formatted + ' ▌'); scrollToBottom(); } } catch (e) { } } }
-    } catch (error) { if (error.name !== 'AbortError') { console.error('Fetch error:', error); contentElement.innerHTML = `<span style="color: #c14a4a;">Ошибка: ${error.message}</span>`; } else { aiMsg.content += '\n\n*(Генерация остановлена)*'; } }
-    finally { state.isGenerating = false; document.body.classList.remove('is-generating'); state.abortController = null; if (aiMsg.content.includes('```')) { aiMsg.content = _formatCodeContent(aiMsg.content); } contentElement.innerHTML = marked.parse(aiMsg.content); state.conversationHistory.push(aiMsg); enhanceCodeBlocks(aiMessageElement); enhanceTables(aiMessageElement); if (window.Prism) { Prism.highlightAllUnder(aiMessageElement); } setSendButtonState(); updateCurrentChat(); updateAIActions(); const isNewChat = state.conversationHistory.length <= 2; if (isNewChat && aiMsg.content) { generateChatTitle(state.currentChatId); } }
+        
+        while (true) { 
+            const { done, value } = await reader.read(); 
+            if (done) break; 
+            const textChunk = decoder.decode(value, { stream: true }); 
+            const lines = textChunk.split('\n').filter(line => line.startsWith('data: ')); 
+            for (const line of lines) { 
+                const jsonStr = line.substring(6); 
+                if (jsonStr.trim() === '[DONE]') break; 
+                try { 
+                    const parsed = JSON.parse(jsonStr), chunkContent = parsed.choices[0]?.delta?.content; 
+                    if (chunkContent) { 
+                        aiMsg.content += chunkContent; 
+                        let formatted = aiMsg.content.includes('```') ? _formatCodeContent(aiMsg.content) : aiMsg.content; 
+                        contentElement.innerHTML = marked.parse(formatted + ' ▌'); 
+                        scrollToBottom(); 
+                    } 
+                } catch (e) { } 
+            } 
+        }
+    } catch (error) { 
+        if (error.name !== 'AbortError') { 
+            console.error('Fetch error:', error); 
+            contentElement.innerHTML = `<span style="color: #c14a4a;">Ошибка: ${error.message}</span>`; 
+        } else { 
+            aiMsg.content += '\n\n*(Генерация остановлена)*'; 
+        } 
+    }
+    finally { 
+        state.isGenerating = false; 
+        document.body.classList.remove('is-generating'); 
+        state.abortController = null; 
+        
+        // ВАЖНО: Если сообщение пустое (из-за ошибки), не сохраняем его в историю
+        // Это предотвращает "смерть" следующего запроса
+        if (aiMsg.content.trim() === '') {
+            aiMessageElement.remove(); // Удаляем пустой пузырь из чата
+        } else {
+            if (aiMsg.content.includes('```')) { aiMsg.content = _formatCodeContent(aiMsg.content); } 
+            contentElement.innerHTML = marked.parse(aiMsg.content); 
+            state.conversationHistory.push(aiMsg); 
+            enhanceCodeBlocks(aiMessageElement); 
+            enhanceTables(aiMessageElement); 
+            if (window.Prism) { Prism.highlightAllUnder(aiMessageElement); } 
+            
+            const isNewChat = state.conversationHistory.length <= 2; 
+            if (isNewChat && aiMsg.content) { generateChatTitle(state.currentChatId); }
+        }
+
+        setSendButtonState(); 
+        updateCurrentChat(); 
+        updateAIActions(); 
+    }
 }
 
 async function generateChatTitle(chatId) { const chat = state.chats.find(c => c.id === chatId); if (!chat || chat.title !== 'Новый чат' || !chat.messages[0] || !chat.messages[1]) return; const modelDetails = getModelDetails(chat.model); if (!modelDetails || !modelDetails.apiKey) return; const userContent = chat.messages[0].originalContent || '', aiContent = chat.messages[1].content.substring(0, 150); const titlePrompt = `Придумай короткий заголовок (3-5 слов) для этого диалога. Ответь только заголовком. Диалог:\n\nUser: ${userContent}\nAI: ${aiContent}`; try { const response = await fetch(modelDetails.endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${modelDetails.apiKey}` }, body: JSON.stringify({ model: modelDetails.modelName, messages: [{ role: 'user', content: titlePrompt }], max_tokens: 20 }) }); if (!response.ok) return; const data = await response.json(); const newTitle = data.choices[0]?.message?.content; if (newTitle) { const chatToRename = state.chats.find(c => c.id === chatId); if (chatToRename) { chatToRename.title = newTitle.replace(/["'«»]/g, "").trim(); saveState(); renderChatsList(); updatePageTitle(); } } } catch (error) { console.error('Error generating title:', error); } }
